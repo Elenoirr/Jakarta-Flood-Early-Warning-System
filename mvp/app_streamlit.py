@@ -109,7 +109,7 @@ hr { border-color:#161f2e !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# ── Constants (keys match dataset values for exact model compatibility) ───────
 AREA_MAP = {
     "DKI Jakarta":      ["Semua Wilayah"],
     "Jakarta Utara":    ["Semua Wilayah","Kelapa Gading","Penjaringan","Pluit","Tanjung Priok","Pademangan"],
@@ -119,7 +119,9 @@ AREA_MAP = {
     "Jakarta Pusat":    ["Semua Wilayah","Menteng","Gambir","Senen","Kemayoran","Tanah Abang"],
 }
 
-# Bar color per risk level
+def format_subdistrict(val):
+    return "All Areas" if val == "Semua Wilayah" else val
+
 def risk_color(pct):
     if pct >= 0.6:  return "#ff453a"
     if pct >= 0.4:  return "#ff9500"
@@ -127,11 +129,11 @@ def risk_color(pct):
     return "#30d158"
 
 def severity_label(cm):
-    if cm <= 0:  return "Tidak Banjir",    "badge-ok",     "✅"
-    if cm < 10:  return "Minor (<10cm)",   "badge-minor",  "⚠️"
-    if cm < 30:  return "Sedang (10–30cm)","badge-mod",    "🟠"
-    if cm < 50:  return "Tinggi (30–50cm)","badge-high",   "🚨"
-    return            "Parah (≥50cm)",      "badge-severe", "🔴"
+    if cm <= 0:  return "No Flood",          "badge-ok",     "✅"
+    if cm < 10:  return "Minor (<10 cm)",    "badge-minor",  "⚠️"
+    if cm < 30:  return "Moderate (10–30 cm)","badge-mod",    "🟠"
+    if cm < 50:  return "High (30–50 cm)",   "badge-high",   "🚨"
+    return            "Severe (≥50 cm)",     "badge-severe", "🔴"
 
 # ── Feature engineering ───────────────────────────────────────────────────────
 def add_time_features(df):
@@ -163,7 +165,7 @@ def add_lag_roll_features(df, max_lag=6):
     df["tide_level_delta1"]  = df.groupby(grp)["tide_level_cm"].diff()
     return df
 
-@st.cache_data(show_spinner="⚙️ Menyiapkan fitur dataset...")
+@st.cache_data(show_spinner="⚙️ Engineering dataset features...")
 def prepare_combined(_df_raw, max_lag):
     df = _df_raw.copy()
     df["timestamp"] = pd.to_datetime(df["timestamp"])
@@ -171,7 +173,7 @@ def prepare_combined(_df_raw, max_lag):
               "soil_moisture","drainage_blockage_idx","temp_c","humidity_pct","wind_mps","pump_active"]
     missing = [c for c in needed if c not in df.columns]
     if missing:
-        raise ValueError(f"Kolom tidak ditemukan: {missing}")
+        raise ValueError(f"Missing required columns: {missing}")
     if "rain_mm_3h"  not in df.columns:
         df["rain_mm_3h"]  = df.groupby(["wilayah","kelurahan"])["rain_mm_1h"].transform(lambda x: x.rolling(3,  min_periods=1).sum())
     if "rain_mm_24h" not in df.columns:
@@ -190,27 +192,27 @@ with st.sidebar:
     st.markdown('<div class="sec">① Classifier Model</div>', unsafe_allow_html=True)
     up_clf = st.file_uploader("flood_classifier.joblib", type=["joblib"], key="clf")
     if up_clf:
-        st.success("✅ Classifier siap", icon=None)
+        st.success("✅ Classifier ready", icon=None)
 
     st.markdown('<div class="sec">② Depth Regressor</div>', unsafe_allow_html=True)
     up_reg = st.file_uploader("flood_depth_regressor.joblib", type=["joblib"], key="reg")
     if up_reg:
-        st.success("✅ Regressor siap", icon=None)
+        st.success("✅ Regressor ready", icon=None)
 
     st.markdown('<div class="sec">③ Dataset</div>', unsafe_allow_html=True)
     up_data = st.file_uploader("jakarta_flood_combined.xlsx", type=["xlsx","csv"], key="data")
     if up_data:
-        st.success("✅ Dataset siap", icon=None)
+        st.success("✅ Dataset ready", icon=None)
 
-    st.markdown('<div class="sec">④ Pilih Area</div>', unsafe_allow_html=True)
-    wilayah_choice   = st.selectbox("Wilayah",   list(AREA_MAP.keys()))
-    kelurahan_choice = st.selectbox("Kelurahan", AREA_MAP[wilayah_choice])
+    st.markdown('<div class="sec">④ Select Area</div>', unsafe_allow_html=True)
+    wilayah_choice   = st.selectbox("Municipality", list(AREA_MAP.keys()))
+    kelurahan_choice = st.selectbox("Sub-district", AREA_MAP[wilayah_choice], format_func=format_subdistrict)
 
 # ── Header ────────────────────────────────────────────────────────────────────
 area_label = wilayah_choice if kelurahan_choice == "Semua Wilayah" else f"{kelurahan_choice}, {wilayah_choice}"
 st.markdown("# 🌧️ Jakarta Flood Early Warning System")
 st.markdown(f'<div class="area-pill">📍 {area_label}</div>', unsafe_allow_html=True)
-st.caption("Upload 2 model + 1 dataset → pilih area dari sidebar → prediksi banjir 6 jam ke depan")
+st.caption("Upload 2 trained models + 1 telemetry dataset → select a target area in the sidebar → generate 6-hour ahead flood predictions")
 
 # ── Gate ──────────────────────────────────────────────────────────────────────
 missing_files = []
@@ -218,11 +220,11 @@ if not up_clf:  missing_files.append("**flood_classifier.joblib**")
 if not up_reg:  missing_files.append("**flood_depth_regressor.joblib**")
 if not up_data: missing_files.append("**jakarta_flood_combined.xlsx**")
 if missing_files:
-    st.info("👈 Upload file berikut dari sidebar:\n\n" + "\n\n".join(f"- {f}" for f in missing_files))
+    st.info("👈 Upload the following files in the sidebar to begin:\n\n" + "\n\n".join(f"- {f}" for f in missing_files))
     st.stop()
 
 # ── Load models ───────────────────────────────────────────────────────────────
-@st.cache_resource(show_spinner="🤖 Loading model...")
+@st.cache_resource(show_spinner="🤖 Loading ML models...")
 def load_model_from_bytes(clf_bytes, reg_bytes):
     return joblib.load(io.BytesIO(clf_bytes)), joblib.load(io.BytesIO(reg_bytes))
 
@@ -237,12 +239,12 @@ reg       = reg_bundle["model"]
 reg_feat  = reg_bundle["features"]
 
 st.markdown(
-    f"<small>✅ Model loaded · threshold <code>{threshold:.3f}</code> · max_lag <code>{max_lag}</code></small>",
+    f"<small>✅ Models loaded · decision threshold <code>{threshold:.3f}</code> · max_lag <code>{max_lag}h</code></small>",
     unsafe_allow_html=True
 )
 
 # ── Load dataset ──────────────────────────────────────────────────────────────
-with st.spinner("📂 Membaca dataset..."):
+with st.spinner("📂 Reading dataset..."):
     name   = up_data.name.lower()
     df_raw = pd.read_csv(up_data) if name.endswith(".csv") else pd.read_excel(up_data, sheet_name="data")
 
@@ -269,23 +271,23 @@ def filter_area(df, wilayah, kelurahan):
 
 df = filter_area(df_full, wilayah_choice, kelurahan_choice)
 if len(df) == 0:
-    st.warning(f"Tidak ada data untuk area **{area_label}**.")
+    st.warning(f"No telemetry records found for **{area_label}**.")
     st.stop()
 
 # ── TAB LAYOUT ────────────────────────────────────────────────────────────────
 tab_pred, tab_history, tab_ranking = st.tabs([
-    "🔮 Prediksi",
-    "📊 Riwayat Banjir",
-    "🏆 Ranking Risiko",
+    "🔮 6-Hour Forecast",
+    "📊 Historical Floods",
+    "🏆 Risk Ranking",
 ])
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 1 – PREDIKSI
+# TAB 1 – 6-HOUR FORECAST
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_pred:
-    st.markdown('<div class="sec">Prediksi Banjir</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec">Flood Forecast</div>', unsafe_allow_html=True)
 
-    idx        = st.slider("Pilih baris / timestamp (default = paling baru)", 0, len(df)-1, len(df)-1)
+    idx        = st.slider("Select observation row / timestamp (default = latest)", 0, len(df)-1, len(df)-1)
     row        = df.iloc[[idx]]
     prob       = float(clf.predict_proba(row[clf_feat].astype(float))[:,1][0])
     pred_flood = int(prob >= threshold)
@@ -298,12 +300,12 @@ with tab_pred:
     st.markdown(f"""
     <div class="pred-box">
       <div class="ts-line">
-        📅 Data &nbsp;<strong>{ts_data.strftime('%A, %d %B %Y · %H:%M')}</strong>
+        📅 Observation &nbsp;<strong>{ts_data.strftime('%A, %d %B %Y · %H:%M')}</strong>
         <span class="ts-arrow">→</span>
-        🕐 Prediksi &nbsp;<strong>{ts_pred.strftime('%A, %d %B %Y · %H:%M')}</strong>
+        🕐 Forecast (+6h) &nbsp;<strong>{ts_pred.strftime('%A, %d %B %Y · %H:%M')}</strong>
       </div>
       <div style="font-size:.78rem;color:#334a65;margin-bottom:12px;">
-        Prediksi kondisi banjir 6 jam ke depan · <strong>{area_label}</strong>
+        6-hour ahead flood condition forecast · <strong>{area_label}</strong>
       </div>
       <span class="badge {sev_cls}">{sev_icon} {sev_label}</span>
       &nbsp;
@@ -314,28 +316,28 @@ with tab_pred:
     """, unsafe_allow_html=True)
 
     c1, c2, c3, c4 = st.columns(4)
-    delta_label = "⬆ Waspada" if prob > 0.6 else ("↔ Normal" if prob > 0.3 else "⬇ Aman")
+    delta_label = "⬆ Alert" if prob > 0.6 else ("↔ Moderate" if prob > 0.3 else "⬇ Safe")
     delta_color = "inverse" if prob > 0.6 else "normal"
-    c1.metric("🌊 Prob Banjir (6h)", f"{prob:.1%}", delta=delta_label, delta_color=delta_color)
-    c2.metric("🚨 Status",           "BANJIR" if pred_flood else "AMAN")
-    c3.metric("📏 Est. Kedalaman",   f"{depth_est:.1f} cm")
-    c4.metric("🕐 Waktu Prediksi",   ts_pred.strftime("%d %b %H:%M"))
+    c1.metric("🌊 Flood Prob (6h)", f"{prob:.1%}", delta=delta_label, delta_color=delta_color)
+    c2.metric("🚨 Status",          "FLOOD" if pred_flood else "SAFE")
+    c3.metric("📏 Est. Depth",      f"{depth_est:.1f} cm")
+    c4.metric("🕐 Forecast Time",   ts_pred.strftime("%d %b %H:%M"))
 
-    with st.expander("📡 Data sensor baris terpilih"):
+    with st.expander("📡 Selected row sensor telemetry"):
         sensor_cols = ["rain_mm_1h","rain_mm_3h","rain_mm_24h","river_level_cm","tide_level_cm",
                        "soil_moisture","drainage_blockage_idx","temp_c","humidity_pct","wind_mps","pump_active"]
         avail = [c for c in sensor_cols if c in df.columns]
         st.dataframe(row[avail].rename(columns={
-            "rain_mm_1h":"Hujan 1h (mm)","rain_mm_3h":"Hujan 3h (mm)","rain_mm_24h":"Hujan 24h (mm)",
-            "river_level_cm":"Sungai (cm)","tide_level_cm":"Pasang (cm)","soil_moisture":"Kelembaban Tanah",
-            "drainage_blockage_idx":"Drainase Idx","temp_c":"Suhu (°C)",
-            "humidity_pct":"Kelembaban Udara (%)","wind_mps":"Angin (m/s)","pump_active":"Pompa Aktif",
+            "rain_mm_1h":"Rain 1h (mm)","rain_mm_3h":"Rain 3h (mm)","rain_mm_24h":"Rain 24h (mm)",
+            "river_level_cm":"River Level (cm)","tide_level_cm":"Tide Level (cm)","soil_moisture":"Soil Moisture",
+            "drainage_blockage_idx":"Drainage Blockage Idx","temp_c":"Temp (°C)",
+            "humidity_pct":"Humidity (%)","wind_mps":"Wind (m/s)","pump_active":"Pump Active",
         }), use_container_width=True, hide_index=True)
 
-    st.markdown('<div class="sec">Tabel Prediksi Batch</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec">Batch Prediction Table</div>', unsafe_allow_html=True)
     col_n, col_f = st.columns([2,1])
-    with col_n: n_rows    = st.number_input("Tampilkan N baris terakhir", 10, 1000, 48, 10)
-    with col_f: flood_only = st.checkbox("Hanya BANJIR")
+    with col_n: n_rows     = st.number_input("Display last N rows", 10, 1000, 48, 10)
+    with col_f: flood_only = st.checkbox("Show FLOOD events only")
 
     tail    = df.tail(int(n_rows)).copy()
     prob_a  = clf.predict_proba(tail[clf_feat].astype(float))[:,1]
@@ -344,36 +346,36 @@ with tab_pred:
     pred_ts = pd.to_datetime(tail["timestamp"]) + timedelta(hours=6)
 
     out = pd.DataFrame({
-        "📅 Timestamp Data":      tail["timestamp"].dt.strftime("%d/%m/%Y %H:%M").values,
-        "🕐 Prediksi (+6h)":      pred_ts.dt.strftime("%d/%m/%Y %H:%M").values,
-        "📍 Wilayah":             tail["wilayah"].values,
-        "🏘️ Kelurahan":           tail["kelurahan"].values,
-        "🌊 Prob Banjir":         [f"{p:.1%}" for p in prob_a],
-        "🚨 Status":               ["BANJIR" if p else "AMAN" for p in pred_a],
-        "📏 Kedalaman Est. (cm)": [f"{d:.1f}" for d in dep_a],
+        "📅 Observation Time":     tail["timestamp"].dt.strftime("%d/%m/%Y %H:%M").values,
+        "🕐 Forecast (+6h)":       pred_ts.dt.strftime("%d/%m/%Y %H:%M").values,
+        "📍 Municipality":         tail["wilayah"].values,
+        "🏘️ Sub-district":         [format_subdistrict(k) for k in tail["kelurahan"].values],
+        "🌊 Flood Prob":           [f"{p:.1%}" for p in prob_a],
+        "🚨 Status":               ["FLOOD" if p else "SAFE" for p in pred_a],
+        "📏 Est. Depth (cm)":      [f"{d:.1f}" for d in dep_a],
         "⚠️ Severity":            [severity_label(d)[0] for d in dep_a],
     })
     if flood_only:
-        out = out[out["🚨 Status"] == "BANJIR"]
+        out = out[out["🚨 Status"] == "FLOOD"]
     st.dataframe(out, use_container_width=True, hide_index=True)
 
-    fname = f"prediksi_{area_label.replace(' ','_').replace(',','').lower()}.csv"
+    fname = f"forecast_{area_label.replace(' ','_').replace(',','').lower()}.csv"
     st.download_button("⬇️ Download CSV", out.to_csv(index=False).encode(), file_name=fname, mime="text/csv")
 
-    st.markdown('<div class="sec">Ringkasan</div>', unsafe_allow_html=True)
+    st.markdown('<div class="sec">Batch Summary</div>', unsafe_allow_html=True)
     pct_flood  = pred_a.mean()
     avg_depth  = dep_a[dep_a>0].mean() if (dep_a>0).any() else 0.0
     max_depth  = dep_a.max()
     worst_time = pred_ts.iloc[dep_a.argmax()].strftime("%d %b %Y %H:%M")
     s1,s2,s3,s4,s5 = st.columns(5)
-    s1.metric("📊 % Jam Berisiko",      f"{pct_flood:.1%}")
-    s2.metric("🔢 Total Jam Banjir",    f"{int(pred_a.sum())}")
-    s3.metric("📏 Kedalaman Rata-rata", f"{avg_depth:.1f} cm")
-    s4.metric("⬆️ Kedalaman Maks",      f"{max_depth:.1f} cm")
-    s5.metric("🕐 Puncak Prediksi",     worst_time)
+    s1.metric("📊 % Risk Hours",      f"{pct_flood:.1%}")
+    s2.metric("🔢 Total Flood Hours", f"{int(pred_a.sum())}")
+    s3.metric("📏 Avg Depth",         f"{avg_depth:.1f} cm")
+    s4.metric("⬆️ Max Depth",         f"{max_depth:.1f} cm")
+    s5.metric("🕐 Peak Forecast",     worst_time)
 
     if df["kelurahan"].nunique() > 1:
-        st.markdown('<div class="sec">Breakdown per Kelurahan</div>', unsafe_allow_html=True)
+        st.markdown('<div class="sec">Breakdown by Sub-District</div>', unsafe_allow_html=True)
         tail2  = df.tail(int(n_rows)).copy()
         prob_b = clf.predict_proba(tail2[clf_feat].astype(float))[:,1]
         pred_b = (prob_b >= threshold).astype(int)
@@ -381,85 +383,86 @@ with tab_pred:
         tail2["_prob"] = prob_b; tail2["_pred"] = pred_b; tail2["_dep"] = dep_b
         smry = (
             tail2.groupby("kelurahan")
-            .agg(total=("_pred","count"), banjir=("_pred","sum"),
+            .agg(total=("_pred","count"), flood=("_pred","sum"),
                  prob_avg=("_prob","mean"),
                  dep_avg=("_dep", lambda x: x[x>0].mean() if (x>0).any() else 0),
                  dep_max=("_dep","max"))
-            .reset_index().sort_values("banjir", ascending=False)
+            .reset_index().sort_values("flood", ascending=False)
         )
-        smry["% Banjir"]       = (smry["banjir"]/smry["total"]).map("{:.1%}".format)
-        smry["Prob Rata-rata"] = smry["prob_avg"].map("{:.1%}".format)
-        smry["Kedalaman Avg"]  = smry["dep_avg"].map("{:.1f} cm".format)
-        smry["Kedalaman Maks"] = smry["dep_max"].map("{:.1f} cm".format)
-        smry = smry.rename(columns={"kelurahan":"🏘️ Kelurahan","total":"Total Jam","banjir":"Jam Banjir"})
+        smry["kelurahan"]  = smry["kelurahan"].map(format_subdistrict)
+        smry["% Flood"]    = (smry["flood"]/smry["total"]).map("{:.1%}".format)
+        smry["Avg Prob"]   = smry["prob_avg"].map("{:.1%}".format)
+        smry["Avg Depth"]  = smry["dep_avg"].map("{:.1f} cm".format)
+        smry["Max Depth"]  = smry["dep_max"].map("{:.1f} cm".format)
+        smry = smry.rename(columns={"kelurahan":"🏘️ Sub-district","total":"Total Hours","flood":"Flood Hours"})
         st.dataframe(
-            smry[["🏘️ Kelurahan","Total Jam","Jam Banjir","% Banjir","Prob Rata-rata","Kedalaman Avg","Kedalaman Maks"]],
+            smry[["🏘️ Sub-district","Total Hours","Flood Hours","% Flood","Avg Prob","Avg Depth","Max Depth"]],
             use_container_width=True, hide_index=True
         )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 2 – RIWAYAT BANJIR
+# TAB 2 – HISTORICAL FLOODS
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_history:
-    st.markdown('<div class="sec">Riwayat Kejadian Banjir di Dataset</div>', unsafe_allow_html=True)
-    st.caption("Berdasarkan kolom `flood_now` di dataset historis — bukan hasil prediksi model.")
+    st.markdown('<div class="sec">Historical Flood Events in Dataset</div>', unsafe_allow_html=True)
+    st.caption("Computed from ground-truth `flood_now` labels in the historical dataset — not model predictions.")
 
-    # hanya pakai baris yang ada flood_now
     if "flood_now" not in df_full.columns:
-        st.warning("Kolom `flood_now` tidak ditemukan di dataset.")
+        st.warning("Column `flood_now` was not found in the uploaded dataset.")
     else:
         hist_scope = df_full[df_full["kelurahan"] != "Semua Wilayah"].copy()
         if len(hist_scope) == 0:
             hist_scope = df_full.copy()
 
-        # Filter wilayah context
         if wilayah_choice != "DKI Jakarta":
             hist_scope = hist_scope[hist_scope["wilayah"] == wilayah_choice]
         if kelurahan_choice != "Semua Wilayah":
             hist_scope = hist_scope[hist_scope["kelurahan"] == kelurahan_choice]
 
         hist_scope["timestamp"] = pd.to_datetime(hist_scope["timestamp"])
-        hist_scope["bulan"]     = hist_scope["timestamp"].dt.to_period("M").astype(str)
-        hist_scope["tahun"]     = hist_scope["timestamp"].dt.year
+        hist_scope["month"]     = hist_scope["timestamp"].dt.to_period("M").astype(str)
+        hist_scope["year"]      = hist_scope["timestamp"].dt.year
 
         # Monthly flood count
         monthly = (
-            hist_scope.groupby(["bulan","kelurahan"])["flood_now"]
+            hist_scope.groupby(["month","kelurahan"])["flood_now"]
             .sum().reset_index()
-            .rename(columns={"flood_now":"Jam Banjir","bulan":"Bulan","kelurahan":"Kelurahan"})
+            .rename(columns={"flood_now":"Flood Hours","month":"Month","kelurahan":"Sub-district"})
         )
-        monthly_pivot = monthly.pivot_table(index="Bulan", columns="Kelurahan", values="Jam Banjir", fill_value=0)
+        monthly["Sub-district"] = monthly["Sub-district"].map(format_subdistrict)
+        monthly_pivot = monthly.pivot_table(index="Month", columns="Sub-district", values="Flood Hours", fill_value=0)
 
-        st.markdown("#### 📅 Jam Banjir per Bulan")
+        st.markdown("#### 📅 Flood Hours per Month")
         st.dataframe(monthly_pivot, use_container_width=True)
 
         # Yearly summary
-        st.markdown("#### 📆 Ringkasan per Tahun")
+        st.markdown("#### 📆 Annual Summary")
         yearly = (
-            hist_scope.groupby(["tahun","kelurahan"])
+            hist_scope.groupby(["year","kelurahan"])
             .agg(
-                jam_banjir     = ("flood_now","sum"),
-                total_jam      = ("flood_now","count"),
-                depth_avg      = ("flood_depth_cm", lambda x: x[x>0].mean() if (x>0).any() else 0),
-                depth_max      = ("flood_depth_cm","max"),
+                flood_hours = ("flood_now","sum"),
+                total_hours = ("flood_now","count"),
+                depth_avg   = ("flood_depth_cm", lambda x: x[x>0].mean() if (x>0).any() else 0),
+                depth_max   = ("flood_depth_cm","max"),
             )
             .reset_index()
         )
-        yearly["% Waktu Banjir"] = (yearly["jam_banjir"]/yearly["total_jam"]).map("{:.1%}".format)
-        yearly["depth_avg"]      = yearly["depth_avg"].map("{:.1f} cm".format)
-        yearly["depth_max"]      = yearly["depth_max"].map("{:.1f} cm".format)
+        yearly["kelurahan"]     = yearly["kelurahan"].map(format_subdistrict)
+        yearly["% Flood Time"]  = (yearly["flood_hours"]/yearly["total_hours"]).map("{:.1%}".format)
+        yearly["depth_avg"]     = yearly["depth_avg"].map("{:.1f} cm".format)
+        yearly["depth_max"]     = yearly["depth_max"].map("{:.1f} cm".format)
         yearly = yearly.rename(columns={
-            "tahun":"Tahun","kelurahan":"Kelurahan",
-            "jam_banjir":"Jam Banjir","total_jam":"Total Jam",
-            "depth_avg":"Depth Avg","depth_max":"Depth Maks",
-        }).sort_values(["Tahun","Jam Banjir"], ascending=[True,False])
+            "year":"Year","kelurahan":"Sub-district",
+            "flood_hours":"Flood Hours","total_hours":"Total Hours",
+            "depth_avg":"Avg Depth","depth_max":"Max Depth",
+        }).sort_values(["Year","Flood Hours"], ascending=[True,False])
         st.dataframe(
-            yearly[["Tahun","Kelurahan","Jam Banjir","% Waktu Banjir","Depth Avg","Depth Maks"]],
+            yearly[["Year","Sub-district","Flood Hours","% Flood Time","Avg Depth","Max Depth"]],
             use_container_width=True, hide_index=True
         )
 
-        # Worst flood events (individual hours)
-        st.markdown("#### 🚨 10 Kejadian Banjir Terparah")
+        # Worst flood events
+        st.markdown("#### 🚨 Top 10 Most Severe Flood Events")
         worst = (
             hist_scope[hist_scope["flood_now"]==1]
             .nlargest(10, "flood_depth_cm")
@@ -467,23 +470,23 @@ with tab_history:
             .copy()
         )
         worst["timestamp"] = worst["timestamp"].dt.strftime("%d %b %Y %H:%M")
+        worst["kelurahan"] = worst["kelurahan"].map(format_subdistrict)
         worst = worst.rename(columns={
-            "timestamp":"Waktu","wilayah":"Wilayah","kelurahan":"Kelurahan",
-            "flood_depth_cm":"Kedalaman (cm)","rain_mm_24h":"Hujan 24h (mm)","river_level_cm":"Sungai (cm)",
+            "timestamp":"Timestamp","wilayah":"Municipality","kelurahan":"Sub-district",
+            "flood_depth_cm":"Depth (cm)","rain_mm_24h":"Rain 24h (mm)","river_level_cm":"River Level (cm)",
         })
         st.dataframe(worst, use_container_width=True, hide_index=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TAB 3 – RANKING RISIKO
+# TAB 3 – RISK RANKING
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_ranking:
-    st.markdown('<div class="sec">Ranking Risiko Banjir per Kelurahan</div>', unsafe_allow_html=True)
-    st.caption("Dihitung dari % kejadian banjir historis di dataset. Gunakan ini untuk tahu area mana yang perlu paling sering dipantau.")
+    st.markdown('<div class="sec">Sub-District Flood Risk Ranking</div>', unsafe_allow_html=True)
+    st.caption("Ranked by historical flood occurrence rate across the dataset to prioritize high-risk monitoring zones.")
 
-    # Compute flood rate per kelurahan across all data
     rank_df = df_full[df_full["kelurahan"] != "Semua Wilayah"].copy()
     if "flood_now" not in rank_df.columns:
-        st.warning("Kolom `flood_now` tidak tersedia.")
+        st.warning("Column `flood_now` is not available in the dataset.")
     else:
         rank_df["flood_now"] = pd.to_numeric(rank_df["flood_now"], errors="coerce").fillna(0)
         if "flood_depth_cm" not in rank_df.columns:
@@ -493,24 +496,23 @@ with tab_ranking:
             rank_df.groupby(["wilayah","kelurahan"])
             .agg(
                 total       = ("flood_now","count"),
-                jam_banjir  = ("flood_now","sum"),
+                flood_hours = ("flood_now","sum"),
                 depth_avg   = ("flood_depth_cm", lambda x: x[x>0].mean() if (x>0).any() else 0),
                 depth_max   = ("flood_depth_cm","max"),
             )
             .reset_index()
         )
-        ranking["flood_rate"] = ranking["jam_banjir"] / ranking["total"]
+        ranking["flood_rate"] = ranking["flood_hours"] / ranking["total"]
         ranking = ranking.sort_values("flood_rate", ascending=False).reset_index(drop=True)
 
-        # Filter by selected wilayah (unless DKI = show all)
         if wilayah_choice != "DKI Jakarta":
             ranking_show = ranking[ranking["wilayah"] == wilayah_choice].reset_index(drop=True)
             scope_label  = wilayah_choice
         else:
             ranking_show = ranking.copy()
-            scope_label  = "DKI Jakarta (semua wilayah)"
+            scope_label  = "DKI Jakarta (All Municipalities)"
 
-        st.markdown(f"**Scope: {scope_label}** — {len(ranking_show)} kelurahan")
+        st.markdown(f"**Scope: {scope_label}** — {len(ranking_show)} sub-districts")
         st.markdown("")
 
         max_rate = ranking_show["flood_rate"].max() if len(ranking_show) else 1.0
@@ -522,14 +524,14 @@ with tab_ranking:
             color       = risk_color(pct)
             top_cls     = "top" if rank_num <= 3 else ""
             dep_avg_str = f"{row_r['depth_avg']:.1f} cm avg" if row_r['depth_avg'] > 0 else "—"
-            dep_max_str = f"{row_r['depth_max']:.0f} cm maks" if row_r['depth_max'] > 0 else "—"
+            dep_max_str = f"{row_r['depth_max']:.0f} cm max" if row_r['depth_max'] > 0 else "—"
 
             st.markdown(f"""
             <div class="rank-card">
               <div class="rank-num {top_cls}">#{rank_num}</div>
               <div style="flex:1;min-width:0;">
-                <div class="rank-name">{row_r['kelurahan']}</div>
-                <div class="rank-sub">{row_r['wilayah']} &nbsp;·&nbsp; {int(row_r['jam_banjir'])} jam banjir &nbsp;·&nbsp; {dep_avg_str} &nbsp;·&nbsp; {dep_max_str}</div>
+                <div class="rank-name">{format_subdistrict(row_r['kelurahan'])}</div>
+                <div class="rank-sub">{row_r['wilayah']} &nbsp;·&nbsp; {int(row_r['flood_hours'])} flood hrs &nbsp;·&nbsp; {dep_avg_str} &nbsp;·&nbsp; {dep_max_str}</div>
                 <div style="margin-top:6px;">
                   <div class="rank-bar-wrap">
                     <div class="rank-bar" style="width:{bar_w}%;background:{color};"></div>
@@ -542,15 +544,15 @@ with tab_ranking:
             </div>
             """, unsafe_allow_html=True)
 
-        # Summary table
         st.markdown("")
-        with st.expander("📋 Lihat sebagai tabel"):
+        with st.expander("📋 View as summary table"):
             tbl = ranking_show.copy()
-            tbl["% Waktu Banjir"] = tbl["flood_rate"].map("{:.1%}".format)
-            tbl["Depth Avg"]      = tbl["depth_avg"].map("{:.1f} cm".format)
-            tbl["Depth Maks"]     = tbl["depth_max"].map("{:.1f} cm".format)
-            tbl = tbl.rename(columns={"wilayah":"Wilayah","kelurahan":"Kelurahan","jam_banjir":"Jam Banjir","total":"Total Jam"})
+            tbl["kelurahan"]    = tbl["kelurahan"].map(format_subdistrict)
+            tbl["% Flood Time"] = tbl["flood_rate"].map("{:.1%}".format)
+            tbl["Avg Depth"]    = tbl["depth_avg"].map("{:.1f} cm".format)
+            tbl["Max Depth"]    = tbl["depth_max"].map("{:.1f} cm".format)
+            tbl = tbl.rename(columns={"wilayah":"Municipality","kelurahan":"Sub-district","flood_hours":"Flood Hours","total":"Total Hours"})
             st.dataframe(
-                tbl[["Wilayah","Kelurahan","Jam Banjir","Total Jam","% Waktu Banjir","Depth Avg","Depth Maks"]],
+                tbl[["Municipality","Sub-district","Flood Hours","Total Hours","% Flood Time","Avg Depth","Max Depth"]],
                 use_container_width=True, hide_index=True
             )

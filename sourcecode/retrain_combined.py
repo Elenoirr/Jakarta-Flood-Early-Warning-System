@@ -1,21 +1,20 @@
 """
 retrain_combined.py
 ───────────────────
-Jalankan script ini SEKALI untuk generate ulang model dari dataset combined.
-Output: models/flood_classifier.joblib + models/flood_depth_regressor.joblib
+Run this script once to train and serialize both ML models from the combined dataset.
+Outputs: models/flood_classifier.joblib + models/flood_depth_regressor.joblib
 
-Cara pakai:
-    cd Aol_softeng_v3
+Usage:
     pip install -r mvp/requirements_mvp.txt
     python sourcecode/retrain_combined.py
 
-Model akan disimpan ke folder models/ secara otomatis.
+Trained model bundles are saved automatically to the models/ directory.
 """
 
-import sys, os
+import sys
 from pathlib import Path
 
-# Resolve paths relative to project root (Aol_softeng_v3/)
+# Resolve paths relative to project root
 ROOT = Path(__file__).resolve().parent.parent
 DATA_PATH  = ROOT / "dataset" / "jakarta_flood_combined.xlsx"
 MODEL_DIR  = ROOT / "models"
@@ -28,7 +27,7 @@ print(f"Model output : {MODEL_DIR}")
 print()
 
 if not DATA_PATH.exists():
-    sys.exit(f"ERROR: Dataset tidak ditemukan di {DATA_PATH}")
+    sys.exit(f"ERROR: Dataset not found at {DATA_PATH}")
 
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -75,9 +74,9 @@ MAX_LAG = 6
 print("Loading dataset...")
 df = pd.read_excel(DATA_PATH, sheet_name="data")
 df["timestamp"] = pd.to_datetime(df["timestamp"])
-print(f"  Rows loaded: {len(df):,}")
-print(f"  Wilayah    : {sorted(df['wilayah'].unique())}")
-print(f"  Kelurahan  : {df['kelurahan'].nunique()} unique")
+print(f"  Rows loaded    : {len(df):,}")
+print(f"  Municipalities : {sorted(df['wilayah'].unique())}")
+print(f"  Sub-districts  : {df['kelurahan'].nunique()} unique")
 
 print("\nEncoding area labels...")
 le_wilayah   = LabelEncoder().fit(df["wilayah"])
@@ -85,13 +84,13 @@ le_kelurahan = LabelEncoder().fit(df["kelurahan"])
 df["wilayah_enc"]   = le_wilayah.transform(df["wilayah"])
 df["kelurahan_enc"] = le_kelurahan.transform(df["kelurahan"])
 
-print("Adding time & lag features (this may take ~1–2 min)...")
+print("Adding time & lag features (this may take ~1-2 min)...")
 df = add_time_features(df)
 df = add_lag_roll_features(df, max_lag=MAX_LAG)
 df = df.dropna().reset_index(drop=True)
 print(f"  Rows after dropna: {len(df):,}")
 
-# Train/test split by time
+# Chronological train/test split
 cutoff = pd.Timestamp("2024-11-01")
 train  = df[df["timestamp"] < cutoff]
 print(f"  Train rows: {len(train):,} | Test rows: {len(df)-len(train):,}")
@@ -110,17 +109,17 @@ clf = HistGradientBoostingClassifier(
     l2_regularization=0.1, random_state=42, class_weight="balanced"
 )
 clf.fit(X_train, y_clf)
-print("  Classifier done.")
+print("  Classifier training complete.")
 
 # ── Train depth regressor ─────────────────────────────────────────────────────
-print("Training depth regressor (flood rows only)...")
+print("Training depth regressor (flood events only)...")
 mask = y_dep > 0
 reg = HistGradientBoostingRegressor(
     learning_rate=0.08, max_depth=6, max_iter=150,
     l2_regularization=0.1, random_state=42
 )
 reg.fit(X_train[mask], y_dep[mask])
-print("  Regressor done.")
+print("  Regressor training complete.")
 
 # ── Save ──────────────────────────────────────────────────────────────────────
 clf_bundle = {
@@ -144,9 +143,8 @@ reg_bundle = {
 joblib.dump(clf_bundle, CLF_OUT)
 joblib.dump(reg_bundle, REG_OUT)
 
-print(f"\n✅ Saved:")
+print(f"\nSaved artifacts:")
 print(f"   {CLF_OUT}")
 print(f"   {REG_OUT}")
-print("\nSekarang jalankan app-nya:")
-print("   cd mvp")
-print("   streamlit run app_streamlit.py")
+print("\nLaunch the web app with:")
+print("   streamlit run mvp/app_streamlit.py")
